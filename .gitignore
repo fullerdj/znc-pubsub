@@ -1,4 +1,4 @@
 a.out
-secrets.h
+*.json
 *.so
 *.swp

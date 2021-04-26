@@ -1,16 +1,22 @@
 #include <algorithm>
 #include <string>
 #include <iostream>
+#include <fstream>
 #include <sstream>
-#include <regex>
 #include <string.h>
 
 #include <curl/curl.h>
 
 #include <cppcodec/base64_rfc4648.hpp>
 // dnf install cppcodec-devel
+#include <rapidjson/document.h>
+#include <rapidjson/istreamwrapper.h>
+#include <rapidjson/stringbuffer.h>
+#include <rapidjson/writer.h>
 
 #include "secrets.h"
+
+const char *credFile = "creds.json";
 
 size_t write_stdout(char *ptr, size_t size, size_t nmemb, void *userdata)
 {
@@ -21,46 +27,56 @@ size_t write_stdout(char *ptr, size_t size, size_t nmemb, void *userdata)
 
 size_t extract_token(char *ptr, size_t size, size_t nmemb, void *userdata)
 {
-  std::string reply(ptr);
-  std::string *token = (std::string *)userdata;
-  std::regex re(".*\"access_token\": \"([^\"]*)\",.*", std::regex::extended);
-  std::smatch match;
-
-  std::regex_match(reply, match, re);
-  
-  if (match.size() >= 2) {
-    *token = match[1];
-  } else {
-    *token = "";
-  }
+  std::string *output = (std::string *)userdata;
+  rapidjson::Document d;
+  d.Parse(ptr);
+  *output = d["access_token"].GetString();
 
   return size*nmemb;
 }
 
 std::string auth_message(void)
 {
+  std::ifstream ifs(credFile);
+  rapidjson::IStreamWrapper isw(ifs);
+  rapidjson::Document d;
+  d.ParseStream(isw);
+
   std::stringstream ss;
 
-  ss << "client_id=" << client_id
-     << "&client_secret=" << client_secret
-     << "&refresh_token=" << refresh_token
+  ss << "client_id=" << d["client_id"].GetString()
+     << "&client_secret=" << d["client_secret"].GetString()
+     << "&refresh_token=" << d["refresh_token"].GetString()
      << "&grant_type=refresh_token";
   return ss.str();
 }
 
-std::string pub_message(void)
+std::string pub_message(std::string content)
 {
   using base64 = cppcodec::base64_rfc4648;
-  std::stringstream ss;
-  ss << "{"
-     <<   "\"messages\": ["
-     <<     "{"
-     //<<       "\"attributes\": {},"
-     <<       "\"data\": \"" << base64::encode("ughblah") << "\""
-     <<     "}"
-     <<   "]"
-     << "}";
-  return ss.str();
+  std::string encoded = base64::encode(content);
+
+  rapidjson::Document d;
+  d.SetObject();
+
+  auto& allocator = d.GetAllocator();
+
+  rapidjson::Value msgs(rapidjson::kArrayType);
+  rapidjson::Value msg(rapidjson::kObjectType);
+  rapidjson::Value str(rapidjson::kObjectType);
+
+
+  str.SetString(encoded.c_str(),
+                static_cast<rapidjson::SizeType>(encoded.length()), allocator);
+  msg.AddMember("data", str, allocator);
+  msgs.PushBack(msg, allocator);
+  d.AddMember("messages", msgs, allocator);
+
+  rapidjson::StringBuffer buf;
+  rapidjson::Writer<rapidjson::StringBuffer> writer(buf);
+  d.Accept(writer);
+
+  return buf.GetString();
 }
 
 CURL *do_curl_init(const char *url, const char *postdata) {
@@ -104,7 +120,14 @@ int main (int argc, char **argv)
   struct curl_slist *headers = NULL;
   std::string auth_header("Authorization: Bearer ");
               auth_header.append(token.c_str());
-  std::string postdata = pub_message();
+
+  std::string postdata;
+
+  if (argc > 1) {
+    postdata = pub_message(std::string(argv[1]));
+  } else {
+    postdata = pub_message("fooblah");
+  }
 
   CURL *curl = do_curl_init(topic_url, postdata.c_str());
 

@@ -1,16 +1,21 @@
 #include <chrono>
 #include <regex>
 #include <iostream>
+#include <fstream>
 
 #include <znc/znc.h>
 #include <znc/Chan.h>
 #include <znc/User.h>
 #include <znc/Modules.h>
-#include <znc/Client.h>
 #include <curl/curl.h>
 
-#include "secrets.h"
+#include <rapidjson/document.h>
+#include <rapidjson/istreamwrapper.h>
+#include <rapidjson/stringbuffer.h>
+#include <rapidjson/writer.h>
 
+const char *credFile = "creds.json";
+const char *topicFile = "topic.json";
 
 class PubSub: public CModule
 {
@@ -19,6 +24,14 @@ class PubSub: public CModule
 			curl_global_init(CURL_GLOBAL_DEFAULT);
 			user = GetUser();
       last_active = token_expires = std::chrono::system_clock::now();
+
+      rapidjson::Document credDoc = parseJsonFile(credFile);
+      client_id = credDoc["client_id"].GetString();
+      client_secret = credDoc["client_secret"].GetString();
+      refresh_token = credDoc["refresh_token"].GetString();
+
+      rapidjson::Document topicDoc = parseJsonFile(topicFile);
+      topic_url = topicDoc["topic_url"].GetString();
     }
 
 		virtual ~PubSub() {
@@ -28,12 +41,27 @@ class PubSub: public CModule
 	protected:
 		const CString app = "ZNC";
 		CUser *user;
+
+    CString client_id;
+    CString client_secret;
+    CString refresh_token;
+    CString topic_url;
+
 		MCString options;
 		MCString defaults;
 
     CString accessToken;
     std::chrono::time_point<std::chrono::system_clock> last_active;
     std::chrono::time_point<std::chrono::system_clock> token_expires;
+
+    rapidjson::Document parseJsonFile(const char *filename) {
+      std::ifstream ifs(filename);
+      rapidjson::IStreamWrapper isw(ifs);
+      rapidjson::Document ret;
+      ret.ParseStream(isw);
+
+      return ret;
+    }
 
     CURL *do_curl_init(const char *url, const char *postdata) {
       CURL *curl = curl_easy_init();
@@ -50,24 +78,18 @@ class PubSub: public CModule
       return curl;
     }
 
+    struct tokendata {
+      CString token;
+      int valid_seconds;
+    };
     static size_t extractToken(char *ptr, size_t size, size_t nmemb,
                                void *userdata)
     {
-      CString reply(ptr);
-      CString *token = (CString *)userdata;
-      std::regex re(".*\"access_token\": \"([^\"]*)\",.*",
-                    std::regex::extended);
-      std::smatch match;
-
-      std::regex_match(reply, match, re);
-
-      std::cout << reply << match[1] << std::endl;
-
-      if (match.size() >= 2) {
-        *token = CString(match[1]);
-      } else {
-        *token = "";
-      }
+      struct tokendata *td = (struct tokendata *)userdata;
+      rapidjson::Document d;
+      d.Parse(ptr);
+      td->token = CString(d["access_token"].GetString());
+      td->valid_seconds = d["expires_in"].GetInt();
 
       return size*nmemb;
     }
@@ -99,8 +121,12 @@ class PubSub: public CModule
       CURL *curl = do_curl_init("https://oauth2.googleapis.com/token",
                                 postdata.c_str());
 
+      struct tokendata td;
       curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, extractToken);
-      curl_easy_setopt(curl, CURLOPT_WRITEDATA, &accessToken);
+      curl_easy_setopt(curl, CURLOPT_WRITEDATA, &td);
+      accessToken = td.token;
+      token_expires = std::chrono::system_clock::now() +
+                      std::chrono::seconds(td.valid_seconds-15);
 
       CURLcode success = curl_easy_perform(curl);
       if (success != CURLE_OK) {
@@ -119,6 +145,32 @@ class PubSub: public CModule
       return message.StartsWith(username);
     }
 
+    CString makeMessage(CString &content)
+    {
+      rapidjson::Document d;
+      d.SetObject();
+
+      auto& allocator = d.GetAllocator();
+
+      rapidjson::Value msgs(rapidjson::kArrayType);
+      rapidjson::Value msg(rapidjson::kObjectType);
+      rapidjson::Value str(rapidjson::kObjectType);
+
+      content.Base64Encode();
+      str.SetString(content.c_str(),
+                    static_cast<rapidjson::SizeType>(content.length()),
+                    allocator);
+      msg.AddMember("data", str, allocator);
+      msgs.PushBack(msg, allocator);
+      d.AddMember("messages", msgs, allocator);
+
+      rapidjson::StringBuffer buf;
+      rapidjson::Writer<rapidjson::StringBuffer> writer(buf);
+      d.Accept(writer);
+
+      return CString(buf.GetString());
+    }
+
     void publish(CTextMessage &message)
     {
       checkToken();
@@ -129,22 +181,13 @@ class PubSub: public CModule
       content = message.GetNick().GetNick() + ": " + message.GetText() + " ("
               + message.GetChan()->GetName() + ")";
 
-      content.Base64Encode();
-
-      postdata += "{";
-      postdata +=  "\"messages\": [";
-      postdata +=    "{";
-      //postdata +=      "\"attributes\": {},";
-      postdata +=      "\"data\": \"" + content + "\"";
-      postdata +=    "}";
-      postdata +=  "]";
-      postdata +="}";
+      postdata = makeMessage(content);
 
       struct curl_slist *headers = NULL;
       CString auth_header("Authorization: Bearer ");
               auth_header.append(accessToken.c_str());
 
-      CURL *curl = do_curl_init(topic_url, postdata.c_str());
+      CURL *curl = do_curl_init(topic_url.c_str(), postdata.c_str());
       CString reply;
 
       headers = curl_slist_append(headers, "Content-Type: application/json");
@@ -183,110 +226,6 @@ class PubSub: public CModule
 		{
       PutModule(command);
     }
-/*
-		EModRet OnChanAction(CNick& nick, CChan& channel, CString& message)
-		{
-			if (notify_channel(nick, channel, message))
-			{
-				CString title = "Highlight";
-
-				send_message(message, title, channel.GetName(), nick);
-			}
-
-			return CONTINUE;
-		}
-
-		EModRet OnChanNotice(CNick& nick, CChan& channel, CString& message)
-		{
-			if (notify_channel(nick, channel, message))
-			{
-				CString title = "Channel Notice";
-
-				send_message(message, title, channel.GetName(), nick);
-			}
-
-			return CONTINUE;
-		}
-
-		EModRet OnPrivMsg(CNick& nick, CString& message)
-		{
-			if (notify_pm(nick, message))
-			{
-				CString title = "Private Message";
-
-				send_message(message, title, nick.GetNick(), nick);
-			}
-
-			return CONTINUE;
-		}
-
-		EModRet OnPrivAction(CNick& nick, CString& message)
-		{
-			if (notify_pm(nick, message))
-			{
-				CString title = "Private Message";
-
-				send_message(message, title, nick.GetNick(), nick);
-			}
-
-			return CONTINUE;
-		}
-
-		EModRet OnPrivNotice(CNick& nick, CString& message)
-		{
-			if (notify_pm(nick, message))
-			{
-				CString title = "Private Notice";
-
-				send_message(message, title, nick.GetNick(), nick);
-			}
-
-			return CONTINUE;
-		}
-
-		EModRet OnUserMsg(CString& target, CString& message)
-		{
-			last_reply_time[target] = last_active_time[target] = idle_time = time(NULL);
-			return CONTINUE;
-		}
-
-		EModRet OnUserAction(CString& target, CString& message)
-		{
-			last_reply_time[target] = last_active_time[target] = idle_time = time(NULL);
-			return CONTINUE;
-		}
-
-		EModRet OnUserNotice(CString& target, CString& message)
-		{
-			last_reply_time[target] = last_active_time[target] = idle_time = time(NULL);
-			return CONTINUE;
-		}
-
-		EModRet OnUserJoin(CString& channel, CString& key)
-		{
-			idle_time = time(NULL);
-			return CONTINUE;
-		}
-
-		EModRet OnUserPart(CString& channel, CString& message)
-		{
-			idle_time = time(NULL);
-			return CONTINUE;
-		}
-
-		EModRet OnUserTopic(CString& channel, CString& topic)
-		{
-			idle_time = time(NULL);
-			return CONTINUE;
-		}
-
-		EModRet OnUserTopicRequest(CString& channel)
-		{
-			idle_time = time(NULL);
-			return CONTINUE;
-		}
-
-*/
 };
 
 template<> void TModInfo<PubSub>(CModInfo& Info) {
