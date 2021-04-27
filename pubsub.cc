@@ -19,218 +19,218 @@ const char *topicFile = "topic.json";
 
 class PubSub: public CModule
 {
-	public:
-		MODCONSTRUCTOR(PubSub) {
-			curl_global_init(CURL_GLOBAL_DEFAULT);
-			user = GetUser();
-      last_active = token_expires = std::chrono::system_clock::now();
+  public:
+  MODCONSTRUCTOR(PubSub) {
+    curl_global_init(CURL_GLOBAL_DEFAULT);
+    user = GetUser();
+    last_active = token_expires = std::chrono::system_clock::now();
 
-      rapidjson::Document credDoc = parseJsonFile(credFile);
-      client_id = credDoc["client_id"].GetString();
-      client_secret = credDoc["client_secret"].GetString();
-      refresh_token = credDoc["refresh_token"].GetString();
+    rapidjson::Document credDoc = parseJsonFile(credFile);
+    client_id = credDoc["client_id"].GetString();
+    client_secret = credDoc["client_secret"].GetString();
+    refresh_token = credDoc["refresh_token"].GetString();
 
-      rapidjson::Document topicDoc = parseJsonFile(topicFile);
-      topic_url = topicDoc["topic_url"].GetString();
+    rapidjson::Document topicDoc = parseJsonFile(topicFile);
+    topic_url = topicDoc["topic_url"].GetString();
+  }
+
+  virtual ~PubSub() {
+    curl_global_cleanup();
+  }
+
+  protected:
+  const CString app = "ZNC";
+  CUser *user;
+
+  CString client_id;
+  CString client_secret;
+  CString refresh_token;
+  CString topic_url;
+
+  MCString options;
+  MCString defaults;
+
+  CString accessToken;
+  std::chrono::time_point<std::chrono::system_clock> last_active;
+  std::chrono::time_point<std::chrono::system_clock> token_expires;
+
+  rapidjson::Document parseJsonFile(const char *filename) {
+    std::ifstream ifs(filename);
+    rapidjson::IStreamWrapper isw(ifs);
+    rapidjson::Document ret;
+    ret.ParseStream(isw);
+
+    return ret;
+  }
+
+  CURL *do_curl_init(const char *url, const char *postdata) {
+    CURL *curl = curl_easy_init();
+    if (!curl) {
+      PutModule("Curl fail");
+      return nullptr;
     }
 
-		virtual ~PubSub() {
-			curl_global_cleanup();
-		}
+    curl_easy_setopt(curl, CURLOPT_URL, url);
+    curl_easy_setopt(curl, CURLOPT_POSTFIELDS, postdata);
+    curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, strlen(postdata));
+    std::cout << postdata << " " << strlen(postdata) << std::endl;
 
-	protected:
-		const CString app = "ZNC";
-		CUser *user;
+    return curl;
+  }
 
-    CString client_id;
-    CString client_secret;
-    CString refresh_token;
-    CString topic_url;
+  struct tokendata {
+    CString token;
+    int valid_seconds;
+  };
+  static size_t extractToken(char *ptr, size_t size, size_t nmemb,
+                             void *userdata)
+  {
+    struct tokendata *td = (struct tokendata *)userdata;
+    rapidjson::Document d;
+    d.Parse(ptr);
+    td->token = CString(d["access_token"].GetString());
+    td->valid_seconds = d["expires_in"].GetInt();
 
-		MCString options;
-		MCString defaults;
+    return size*nmemb;
+  }
 
-    CString accessToken;
-    std::chrono::time_point<std::chrono::system_clock> last_active;
-    std::chrono::time_point<std::chrono::system_clock> token_expires;
+  static size_t getWriteData(char *ptr, size_t size, size_t nmemb,
+                             void *userdata)
+  {
+    CString *reply = (CString *)userdata;
 
-    rapidjson::Document parseJsonFile(const char *filename) {
-      std::ifstream ifs(filename);
-      rapidjson::IStreamWrapper isw(ifs);
-      rapidjson::Document ret;
-      ret.ParseStream(isw);
+    reply->append(ptr);
+    return size*nmemb;
+  }
 
-      return ret;
+  void checkToken(void)
+  {
+    if (std::chrono::system_clock::now() < token_expires) {
+      return;
     }
 
-    CURL *do_curl_init(const char *url, const char *postdata) {
-      CURL *curl = curl_easy_init();
-      if (!curl) {
-        PutModule("Curl fail");
-        return nullptr;
-      }
+    CString postdata;
+    postdata += "client_id=";
+    postdata += client_id;
+    postdata += "&client_secret=";
+    postdata += client_secret;
+    postdata += "&refresh_token=";
+    postdata += refresh_token;
+    postdata += "&grant_type=refresh_token";
 
-      curl_easy_setopt(curl, CURLOPT_URL, url);
-      curl_easy_setopt(curl, CURLOPT_POSTFIELDS, postdata);
-      curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, strlen(postdata));
-      std::cout << postdata << " " << strlen(postdata) << std::endl;
+    CURL *curl = do_curl_init("https://oauth2.googleapis.com/token",
+                              postdata.c_str());
 
-      return curl;
+    struct tokendata td;
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, extractToken);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &td);
+    accessToken = td.token;
+    token_expires = std::chrono::system_clock::now() +
+                    std::chrono::seconds(td.valid_seconds-15);
+
+    CURLcode success = curl_easy_perform(curl);
+    if (success != CURLE_OK) {
+      PutModule("Curl fail getting new token");
+    } else {
+      PutModule("updated token");
+      PutModule(accessToken);
+    }
+  }
+
+  bool matchName(const CString &message)
+  {
+    CString username = user->ExpandString("%nick%");
+    PutModule(message);
+    PutModule(username);
+    return message.StartsWith(username);
+  }
+
+  CString makeMessage(CString &content)
+  {
+    rapidjson::Document d;
+    d.SetObject();
+
+    auto& allocator = d.GetAllocator();
+
+    rapidjson::Value msgs(rapidjson::kArrayType);
+    rapidjson::Value msg(rapidjson::kObjectType);
+    rapidjson::Value str(rapidjson::kObjectType);
+
+    content.Base64Encode();
+    str.SetString(content.c_str(),
+                  static_cast<rapidjson::SizeType>(content.length()),
+                  allocator);
+    msg.AddMember("data", str, allocator);
+    msgs.PushBack(msg, allocator);
+    d.AddMember("messages", msgs, allocator);
+
+    rapidjson::StringBuffer buf;
+    rapidjson::Writer<rapidjson::StringBuffer> writer(buf);
+    d.Accept(writer);
+
+    return CString(buf.GetString());
+  }
+
+  void publish(CTextMessage &message)
+  {
+    checkToken();
+
+    CString content;
+    CString postdata;
+
+    content = message.GetNick().GetNick() + ": " + message.GetText() + " ("
+            + message.GetChan()->GetName() + ")";
+
+    postdata = makeMessage(content);
+
+    struct curl_slist *headers = NULL;
+    CString auth_header("Authorization: Bearer ");
+            auth_header.append(accessToken.c_str());
+
+    CURL *curl = do_curl_init(topic_url.c_str(), postdata.c_str());
+    CString reply;
+
+    headers = curl_slist_append(headers, "Content-Type: application/json");
+    headers = curl_slist_append(headers, "charset: utf-8");
+    headers = curl_slist_append(headers, auth_header.c_str());
+
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, getWriteData);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &reply);
+    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+
+    CURLcode success = curl_easy_perform(curl);
+    if (success != CURLE_OK) {
+      PutModule("Curl fail posting message");
     }
 
-    struct tokendata {
-      CString token;
-      int valid_seconds;
-    };
-    static size_t extractToken(char *ptr, size_t size, size_t nmemb,
-                               void *userdata)
-    {
-      struct tokendata *td = (struct tokendata *)userdata;
-      rapidjson::Document d;
-      d.Parse(ptr);
-      td->token = CString(d["access_token"].GetString());
-      td->valid_seconds = d["expires_in"].GetInt();
+    curl_slist_free_all(headers);
 
-      return size*nmemb;
+    PutModule(reply);
+  }
+
+  bool OnLoad(const CString &args, CString &message)
+  {
+    PutModule("hello");
+    return true;
+  }
+
+  EModRet OnChanTextMessage(CTextMessage &message)
+  {
+    if (matchName(message.GetText())) {
+      publish(message);
     }
+    return CONTINUE;
+  }
 
-    static size_t getWriteData(char *ptr, size_t size, size_t nmemb,
-                               void *userdata)
-    {
-      CString *reply = (CString *)userdata;
-
-      reply->append(ptr);
-      return size*nmemb;
-    }
-
-    void checkToken(void)
-    {
-      if (std::chrono::system_clock::now() < token_expires) {
-        return;
-      }
-
-      CString postdata;
-      postdata += "client_id=";
-      postdata += client_id;
-      postdata += "&client_secret=";
-      postdata += client_secret;
-      postdata += "&refresh_token=";
-      postdata += refresh_token;
-      postdata += "&grant_type=refresh_token";
-
-      CURL *curl = do_curl_init("https://oauth2.googleapis.com/token",
-                                postdata.c_str());
-
-      struct tokendata td;
-      curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, extractToken);
-      curl_easy_setopt(curl, CURLOPT_WRITEDATA, &td);
-      accessToken = td.token;
-      token_expires = std::chrono::system_clock::now() +
-                      std::chrono::seconds(td.valid_seconds-15);
-
-      CURLcode success = curl_easy_perform(curl);
-      if (success != CURLE_OK) {
-        PutModule("Curl fail getting new token");
-      } else {
-        PutModule("updated token");
-        PutModule(accessToken);
-      }
-    }
-
-    bool matchName(const CString &message)
-    {
-      CString username = user->ExpandString("%nick%");
-      PutModule(message);
-      PutModule(username);
-      return message.StartsWith(username);
-    }
-
-    CString makeMessage(CString &content)
-    {
-      rapidjson::Document d;
-      d.SetObject();
-
-      auto& allocator = d.GetAllocator();
-
-      rapidjson::Value msgs(rapidjson::kArrayType);
-      rapidjson::Value msg(rapidjson::kObjectType);
-      rapidjson::Value str(rapidjson::kObjectType);
-
-      content.Base64Encode();
-      str.SetString(content.c_str(),
-                    static_cast<rapidjson::SizeType>(content.length()),
-                    allocator);
-      msg.AddMember("data", str, allocator);
-      msgs.PushBack(msg, allocator);
-      d.AddMember("messages", msgs, allocator);
-
-      rapidjson::StringBuffer buf;
-      rapidjson::Writer<rapidjson::StringBuffer> writer(buf);
-      d.Accept(writer);
-
-      return CString(buf.GetString());
-    }
-
-    void publish(CTextMessage &message)
-    {
-      checkToken();
-
-      CString content;
-      CString postdata;
-
-      content = message.GetNick().GetNick() + ": " + message.GetText() + " ("
-              + message.GetChan()->GetName() + ")";
-
-      postdata = makeMessage(content);
-
-      struct curl_slist *headers = NULL;
-      CString auth_header("Authorization: Bearer ");
-              auth_header.append(accessToken.c_str());
-
-      CURL *curl = do_curl_init(topic_url.c_str(), postdata.c_str());
-      CString reply;
-
-      headers = curl_slist_append(headers, "Content-Type: application/json");
-      headers = curl_slist_append(headers, "charset: utf-8");
-      headers = curl_slist_append(headers, auth_header.c_str());
-
-      curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, getWriteData);
-      curl_easy_setopt(curl, CURLOPT_WRITEDATA, &reply);
-      curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-
-      CURLcode success = curl_easy_perform(curl);
-      if (success != CURLE_OK) {
-        PutModule("Curl fail posting message");
-      }
-
-      curl_slist_free_all(headers);
-
-      PutModule(reply);
-    }
-
-		bool OnLoad(const CString &args, CString &message)
-		{
-      PutModule("hello");
-			return true;
-		}
-
-		EModRet OnChanTextMessage(CTextMessage &message)
-		{
-      if (matchName(message.GetText())) {
-        publish(message);
-      }
-			return CONTINUE;
-		}
-
-		void OnModCommand(const CString& command)
-		{
-      PutModule(command);
-    }
+  void OnModCommand(const CString& command)
+  {
+    PutModule(command);
+  }
 };
 
 template<> void TModInfo<PubSub>(CModInfo& Info) {
-	Info.AddType(CModInfo::UserModule);
-	Info.SetWikiPage("PubSub");
+  Info.AddType(CModInfo::UserModule);
+  Info.SetWikiPage("PubSub");
 }
 
 NETWORKMODULEDEFS(PubSub, "Use Google Cloud PubSub to notify about new messages")
