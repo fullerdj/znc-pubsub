@@ -3,6 +3,10 @@
 #include <iostream>
 #include <fstream>
 
+#include <unistd.h>
+#include <sys/types.h>
+#include <pwd.h>
+
 #include <znc/znc.h>
 #include <znc/Chan.h>
 #include <znc/User.h>
@@ -14,8 +18,8 @@
 #include <rapidjson/stringbuffer.h>
 #include <rapidjson/writer.h>
 
-const char *credFile = "creds.json";
-const char *topicFile = "topic.json";
+const std::string credFile(".creds.json");
+const std::string topicFile(".topic.json");
 
 class PubSub: public CModule
 {
@@ -25,12 +29,15 @@ class PubSub: public CModule
     user = GetUser();
     last_active = token_expires = std::chrono::system_clock::now();
 
-    rapidjson::Document credDoc = parseJsonFile(credFile);
+    struct passwd *pw = getpwuid(getuid());
+    std::string homedir(pw->pw_dir);
+
+    rapidjson::Document credDoc = parseJsonFile(homedir + "/" + credFile);
     client_id = credDoc["client_id"].GetString();
     client_secret = credDoc["client_secret"].GetString();
     refresh_token = credDoc["refresh_token"].GetString();
 
-    rapidjson::Document topicDoc = parseJsonFile(topicFile);
+    rapidjson::Document topicDoc = parseJsonFile(homedir + "/" + topicFile);
     topic_url = topicDoc["topic_url"].GetString();
   }
 
@@ -54,7 +61,7 @@ class PubSub: public CModule
   std::chrono::time_point<std::chrono::system_clock> last_active;
   std::chrono::time_point<std::chrono::system_clock> token_expires;
 
-  rapidjson::Document parseJsonFile(const char *filename) {
+  rapidjson::Document parseJsonFile(const std::string &filename) {
     std::ifstream ifs(filename);
     rapidjson::IStreamWrapper isw(ifs);
     rapidjson::Document ret;
