@@ -235,6 +235,13 @@ class PubSub: public CModule
     return CONTINUE;
   }
 
+  EModRet OnPrivTextMessage(CTextMessage &message)
+  {
+    publish(message);
+
+    return CONTINUE;
+  }
+
   void OnModCommand(const CString& command)
   {
     VCString words;
