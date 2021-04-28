@@ -35,9 +35,11 @@ class PubSub: public CModule
     std::string homedir(pw->pw_dir);
 
     rapidjson::Document credDoc = parseJsonFile(homedir + "/" + credFile);
+    PutModule(credFile);
     client_id = credDoc["client_id"].GetString();
     client_secret = credDoc["client_secret"].GetString();
     refresh_token = credDoc["refresh_token"].GetString();
+    PutModule(refresh_token);
 
     rapidjson::Document topicDoc = parseJsonFile(homedir + "/" + topicFile);
     topic_url = topicDoc["topic_url"].GetString();
@@ -82,7 +84,6 @@ class PubSub: public CModule
     curl_easy_setopt(curl, CURLOPT_URL, url);
     curl_easy_setopt(curl, CURLOPT_POSTFIELDS, postdata);
     curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, strlen(postdata));
-    std::cout << postdata << " " << strlen(postdata) << std::endl;
 
     return curl;
   }
@@ -97,7 +98,7 @@ class PubSub: public CModule
     struct tokendata *td = (struct tokendata *)userdata;
     rapidjson::Document d;
     d.Parse(ptr);
-    td->token = CString(d["access_token"].GetString());
+    td->token = d["access_token"].GetString();
     td->valid_seconds = d["expires_in"].GetInt();
 
     return size*nmemb;
@@ -133,17 +134,18 @@ class PubSub: public CModule
     struct tokendata td;
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, extractToken);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &td);
-    accessToken = td.token;
-    token_expires = std::chrono::system_clock::now() +
-                    std::chrono::seconds(td.valid_seconds-15);
 
     CURLcode success = curl_easy_perform(curl);
     if (success != CURLE_OK) {
       PutModule("Curl fail getting new token");
-    } else {
-      PutModule("updated token");
-      PutModule(accessToken);
+      return;
     }
+
+    accessToken = td.token;
+    token_expires = std::chrono::system_clock::now() +
+                    std::chrono::seconds(td.valid_seconds-15);
+
+    PutModule("updated token");
   }
 
   bool matchName(const CString &message)
