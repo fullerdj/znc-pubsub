@@ -182,6 +182,7 @@ class PubSub: public CModule
 
   void publish(CString &content)
   {
+    checkToken();
     CString postdata = makeMessage(content);
 
     struct curl_slist *headers = NULL;
@@ -211,8 +212,6 @@ class PubSub: public CModule
 
   void publish(CTextMessage &message)
   {
-    checkToken();
-
     CString content;
 
     content = message.GetNick().GetNick() + ": " + message.GetText() + " ("
