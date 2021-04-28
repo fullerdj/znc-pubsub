@@ -11,6 +11,8 @@
 #include <znc/Chan.h>
 #include <znc/User.h>
 #include <znc/Modules.h>
+#include <znc/ZNCString.h>
+
 #include <curl/curl.h>
 
 #include <rapidjson/document.h>
@@ -178,17 +180,9 @@ class PubSub: public CModule
     return CString(buf.GetString());
   }
 
-  void publish(CTextMessage &message)
+  void publish(CString &content)
   {
-    checkToken();
-
-    CString content;
-    CString postdata;
-
-    content = message.GetNick().GetNick() + ": " + message.GetText() + " ("
-            + message.GetChan()->GetName() + ")";
-
-    postdata = makeMessage(content);
+    CString postdata = makeMessage(content);
 
     struct curl_slist *headers = NULL;
     CString auth_header("Authorization: Bearer ");
@@ -215,6 +209,17 @@ class PubSub: public CModule
     PutModule(reply);
   }
 
+  void publish(CTextMessage &message)
+  {
+    checkToken();
+
+    CString content;
+
+    content = message.GetNick().GetNick() + ": " + message.GetText() + " ("
+            + message.GetChan()->GetName() + ")";
+    publish(content);
+  }
+
   bool OnLoad(const CString &args, CString &message)
   {
     PutModule("hello");
@@ -231,7 +236,18 @@ class PubSub: public CModule
 
   void OnModCommand(const CString& command)
   {
-    PutModule(command);
+    VCString words;
+
+    command.Split(" ", words, false);
+    if (words.size() < 2)
+      return;
+
+    CString cmd = words[0].AsLower();
+
+    if (cmd == "send") {
+      publish(words[1]);
+      PutModule("published: " + words[1]);
+    }
   }
 };
 
