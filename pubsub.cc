@@ -151,8 +151,6 @@ class PubSub: public CModule
   bool matchName(const CString &message)
   {
     CString username = user->ExpandString("%nick%");
-    PutModule(message);
-    PutModule(username);
     return message.StartsWith(username);
   }
 
