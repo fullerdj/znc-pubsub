@@ -214,8 +214,12 @@ class PubSub: public CModule
   {
     CString content;
 
-    content = message.GetNick().GetNick() + ": " + message.GetText() + " ("
-            + message.GetChan()->GetName() + ")";
+    content = message.GetNick().GetNick() + ": " + message.GetText();
+    CChan *chan = message.GetChan();
+    if (chan)
+      content += " (" + chan->GetName() + ")";
+    else
+      content += " (direct)";
     publish(content);
   }
 
