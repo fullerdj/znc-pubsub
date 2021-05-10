@@ -35,11 +35,9 @@ class PubSub: public CModule
     std::string homedir(pw->pw_dir);
 
     rapidjson::Document credDoc = parseJsonFile(homedir + "/" + credFile);
-    PutModule(credFile);
     client_id = credDoc["client_id"].GetString();
     client_secret = credDoc["client_secret"].GetString();
     refresh_token = credDoc["refresh_token"].GetString();
-    PutModule(refresh_token);
 
     rapidjson::Document topicDoc = parseJsonFile(homedir + "/" + topicFile);
     topic_url = topicDoc["topic_url"].GetString();
