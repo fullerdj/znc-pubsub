@@ -50,6 +50,7 @@ class PubSub: public CModule
   protected:
   const CString app = "ZNC";
   CUser *user;
+  bool debug = false;
 
   CString client_id;
   CString client_secret;
@@ -143,7 +144,9 @@ class PubSub: public CModule
     token_expires = std::chrono::system_clock::now() +
                     std::chrono::seconds(td.valid_seconds-15);
 
-    PutModule("updated token");
+    if (debug) {
+      PutModule("updated token");
+    }
   }
 
   bool matchName(const CString &message)
@@ -205,7 +208,8 @@ class PubSub: public CModule
 
     curl_slist_free_all(headers);
 
-    PutModule(reply);
+    if (debug)
+      PutModule(reply);
   }
 
   void publish(CTextMessage &message)
@@ -255,6 +259,15 @@ class PubSub: public CModule
     if (cmd == "send") {
       publish(words[1]);
       PutModule("published: " + words[1]);
+    } else if (cmd == "debug") {
+      if (words[1] == "on") {
+        debug = true;
+      } else if (words[1] == "off") {
+        debug = false;
+      } else {
+        debug = !debug;
+      }
+      PutModule("debug " + debug ? "on" : "off");
     }
   }
 };
