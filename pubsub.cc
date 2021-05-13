@@ -242,7 +242,7 @@ class PubSub: public CModule
     return CONTINUE;
   }
 
-  void OnModCommand(const CString& command)
+  void OnModCommand(const CString &command)
   {
     VCString words;
 
@@ -259,7 +259,7 @@ class PubSub: public CModule
   }
 };
 
-template<> void TModInfo<PubSub>(CModInfo& Info) {
+template<> void TModInfo<PubSub>(CModInfo &Info) {
   Info.AddType(CModInfo::UserModule);
   Info.SetWikiPage("PubSub");
 }
