@@ -152,7 +152,7 @@ class PubSub: public CModule
     return message.StartsWith(username);
   }
 
-  CString makeMessage(CString &content)
+  static CString makeMessage(CString &content)
   {
     rapidjson::Document d;
     d.SetObject();
