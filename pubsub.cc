@@ -65,7 +65,7 @@ class PubSub: public CModule
   std::chrono::time_point<std::chrono::system_clock> last_active;
   std::chrono::time_point<std::chrono::system_clock> token_expires;
 
-  rapidjson::Document parseJsonFile(const std::string &filename) {
+  static rapidjson::Document parseJsonFile(const std::string &filename) {
     std::ifstream ifs(filename);
     rapidjson::IStreamWrapper isw(ifs);
     rapidjson::Document ret;
@@ -74,10 +74,9 @@ class PubSub: public CModule
     return ret;
   }
 
-  CURL *do_curl_init(const char *url, const char *postdata) {
+  static CURL *do_curl_init(const char *url, const char *postdata) {
     CURL *curl = curl_easy_init();
     if (!curl) {
-      PutModule("Curl fail");
       return nullptr;
     }
 
@@ -130,6 +129,10 @@ class PubSub: public CModule
 
     CURL *curl = do_curl_init("https://oauth2.googleapis.com/token",
                               postdata.c_str());
+    if (!curl) {
+      PutModule("error initializing libcurl");
+      return;
+    }
 
     struct tokendata td;
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, extractToken);
@@ -192,6 +195,10 @@ class PubSub: public CModule
             auth_header.append(accessToken.c_str());
 
     CURL *curl = do_curl_init(topic_url.c_str(), postdata.c_str());
+    if (!curl) {
+      PutModule("error initializing libcurl");
+      return;
+    }
     CString reply;
 
     headers = curl_slist_append(headers, "Content-Type: application/json");
