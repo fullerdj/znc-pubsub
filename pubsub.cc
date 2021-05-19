@@ -11,6 +11,7 @@
 #include <znc/Chan.h>
 #include <znc/User.h>
 #include <znc/Modules.h>
+#include <znc/IRCNetwork.h>
 #include <znc/ZNCString.h>
 
 #include <curl/curl.h>
@@ -216,12 +217,14 @@ class PubSub: public CModule
   {
     CString content;
 
-    content = message.GetNick().GetNick() + ": " + message.GetText();
+    content = message.GetNick().GetNick() + ": " + message.GetText() + " (";
+    content += message.GetNetwork()->GetName() + "/";
+
     CChan *chan = message.GetChan();
     if (chan)
-      content += " (" + chan->GetName() + ")";
+      content += "#" + chan->GetName() + ")";
     else
-      content += " (direct)";
+      content += "direct)";
     publish(content);
   }
 
