@@ -229,7 +229,7 @@ class PubSub: public CModule
 
     CChan *chan = message.GetChan();
     if (chan)
-      content += "#" + chan->GetName() + ")";
+      content += chan->GetName() + ")";
     else
       content += "direct)";
     publish(content);
