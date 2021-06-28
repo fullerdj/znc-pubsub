@@ -91,16 +91,16 @@ class PubSub: public CModule
     CString token;
     int valid_seconds;
   };
-  static size_t extractToken(char *ptr, size_t size, size_t nmemb,
-                             void *userdata)
+  struct tokendata extractToken(const CString& json)
   {
-    struct tokendata *td = (struct tokendata *)userdata;
-    rapidjson::Document d;
-    d.Parse(ptr);
-    td->token = d["access_token"].GetString();
-    td->valid_seconds = d["expires_in"].GetInt();
+    struct tokendata td;
 
-    return size*nmemb;
+    rapidjson::Document d;
+    d.Parse(json.c_str());
+    td.token = d["access_token"].GetString();
+    td.valid_seconds = d["expires_in"].GetInt();
+
+    return td;
   }
 
   static size_t getWriteData(char *ptr, size_t size, size_t nmemb,
@@ -134,9 +134,9 @@ class PubSub: public CModule
       return;
     }
 
-    struct tokendata td;
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, extractToken);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &td);
+    CString reply;
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, getWriteData);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &reply);
 
     CURLcode success = curl_easy_perform(curl);
     if (success != CURLE_OK) {
@@ -144,6 +144,7 @@ class PubSub: public CModule
       return;
     }
 
+    struct tokendata td = extractToken(reply);
     accessToken = td.token;
     token_expires = std::chrono::system_clock::now() +
                     std::chrono::seconds(td.valid_seconds-15);
